@@ -1,0 +1,54 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastAPI: uvicorn (reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--port",
+        "8000",
+        "--reload"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PYTHONUTF8": "1"
+      }
+    },
+    {
+      "name": "FastAPI: uvicorn",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--port",
+        "8000"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUTF8": "1"
+      }
+    },
+    {
+      "name": "Python: Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1"
+      }
+    }
+  ]
+}
