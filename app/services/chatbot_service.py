@@ -769,6 +769,7 @@ def build_receipt(
     language: str,
     reference: str,
     complaint: dict,
+    has_officer: bool = True,
 ) -> str:
     """Compose the confirmation a citizen gets once a complaint is filed.
 
@@ -776,6 +777,7 @@ def build_receipt(
         language: The language code to write the receipt in.
         reference: The complaint's reference number.
         complaint: The saved complaint fields.
+        has_officer: False if no officer is listed for the local body.
 
     Returns:
         The message body, ready to send.
@@ -810,6 +812,11 @@ def build_receipt(
         )
 
     lines.append("")
-    lines.append(messages.t(language, "receipt_next"))
+    lines.append(
+        messages.t(
+            language,
+            "receipt_next" if has_officer else "receipt_no_officer",
+        )
+    )
 
     return "\n".join(lines)

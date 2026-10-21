@@ -419,3 +419,34 @@ async def send_local_body_menu(
     return await _send_whatsapp_payload(
         _list_payload(recipient_phone, screen, rows)
     )
+
+
+async def send_image_message(
+    recipient_phone: str,
+    media_id: str,
+    caption: str | None = None,
+) -> dict:
+    """Send an image that is already uploaded to WhatsApp.
+
+    Args:
+        recipient_phone: The recipient's phone number.
+        media_id: The WhatsApp media id of the image.
+        caption: Optional text shown under the image.
+
+    Returns:
+        The parsed JSON response from the WhatsApp API.
+
+    Raises:
+        httpx.HTTPStatusError: If the API returns an error status.
+    """
+
+    image = {"id": media_id}
+
+    if caption:
+        image["caption"] = caption
+
+    payload = _envelope(recipient_phone)
+
+    payload.update({"type": "image", "image": image})
+
+    return await _send_whatsapp_payload(payload)

@@ -248,6 +248,10 @@ TEXT = {
         "photo_unreadable": (
             "I could not receive the photo. Please try again."
         ),
+        "error_try_again": (
+            "Sorry, something went wrong and your complaint was not "
+            "saved. Please send \"hi\" to try again."
+        ),
         "unsupported": (
             "Please use text, the available options, a location, "
             "or a photo."
@@ -262,6 +266,10 @@ TEXT = {
             "Something went wrong. Please send 'Hi' to start again."
         ),
         "use_options": "Please use the options shown.",
+        "resolved_notice": (
+            "✅ Your complaint *{reference}* has been resolved. "
+            "Photo of the resolved issue is attached."
+        ),
     },
     "ta": {
         "ask_location": (
@@ -316,6 +324,11 @@ TEXT = {
             "புகைப்படத்தைப் பெற முடியவில்லை. மீண்டும் "
             "முயற்சிக்கவும்."
         ),
+        "error_try_again": (
+            "மன்னிக்கவும், ஏதோ தவறு ஏற்பட்டது. உங்கள் புகார் "
+            "சேமிக்கப்படவில்லை. மீண்டும் முயற்சிக்க \"hi\" "
+            "என அனுப்பவும்."
+        ),
         "unsupported": (
             "உரை, கொடுக்கப்பட்ட விருப்பங்கள், இருப்பிடம் "
             "அல்லது புகைப்படத்தைப் பயன்படுத்தவும்."
@@ -333,6 +346,10 @@ TEXT = {
         ),
         "use_options": (
             "காட்டப்பட்டுள்ள விருப்பங்களைப் பயன்படுத்தவும்."
+        ),
+        "resolved_notice": (
+            "✅ உங்கள் புகார் *{reference}* சரிசெய்யப்பட்டது. "
+            "சரிசெய்யப்பட்ட புகைப்படம் இணைக்கப்பட்டுள்ளது."
         ),
     },
 }

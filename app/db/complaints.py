@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Complaint
+from app.db.models import Complaint, Officer
 
 
 REFERENCE_PREFIX = "NLG"
@@ -95,7 +95,43 @@ async def save_complaint(
 
     await session.flush()
 
+    officer = await officer_for(session, row)
+
+    if officer is not None:
+        row.officer_id = officer.id
+        row.assigned_at = datetime.now(timezone.utc)
+
     return row
+
+
+async def officer_for(
+    session: AsyncSession,
+    complaint: Complaint,
+) -> Officer | None:
+    """Find the officer currently responsible for a complaint.
+
+    Complaints and officers are linked by local body name, not by a
+    foreign key, so this always returns whoever holds that local body now.
+
+    Args:
+        session: An open database session.
+        complaint: The saved complaint.
+
+    Returns:
+        The active Officer for the complaint's local body, or None.
+    """
+
+    if not complaint.local_body:
+        return None
+
+    return await session.scalar(
+        select(Officer)
+        .join(Complaint, Complaint.local_body == Officer.local_body)
+        .where(
+            Complaint.id == complaint.id,
+            Officer.is_active.is_(True),
+        )
+    )
 
 
 async def already_saved(
@@ -121,3 +157,101 @@ async def already_saved(
     return await session.scalar(
         select(Complaint).where(Complaint.wamid == wamid)
     )
+
+
+async def officer_by_phone(
+    session: AsyncSession,
+    phone: str,
+) -> Officer | None:
+    """Find the active officer who owns a WhatsApp number.
+
+    Args:
+        session: An open database session.
+        phone: The sender's number, digits only.
+
+    Returns:
+        The active Officer with that number, or None.
+    """
+
+    return await session.scalar(
+        select(Officer).where(
+            Officer.phone == phone,
+            Officer.is_active.is_(True),
+        )
+    )
+
+
+async def pending_for_officer(
+    session: AsyncSession,
+    officer_id: int,
+) -> list[Complaint]:
+    """List an officer's complaints that are still unresolved, oldest first.
+
+    Args:
+        session: An open database session.
+        officer_id: The officer's id.
+
+    Returns:
+        The pending Complaint rows.
+    """
+
+    result = await session.scalars(
+        select(Complaint)
+        .where(
+            Complaint.officer_id == officer_id,
+            Complaint.officer_status == "pending",
+        )
+        .order_by(Complaint.created_at)
+    )
+
+    return list(result)
+
+
+async def complaint_by_reference(
+    session: AsyncSession,
+    reference_no: str,
+    officer_id: int,
+) -> Complaint | None:
+    """Find one of an officer's complaints by reference number.
+
+    Args:
+        session: An open database session.
+        reference_no: For example NLG-2026-00001.
+        officer_id: Only complaints assigned to this officer match.
+
+    Returns:
+        The Complaint, or None.
+    """
+
+    return await session.scalar(
+        select(Complaint).where(
+            Complaint.reference_no == reference_no.upper(),
+            Complaint.officer_id == officer_id,
+        )
+    )
+
+
+async def mark_resolved(
+    session: AsyncSession,
+    complaint: Complaint,
+    photo_path: str | None,
+) -> Complaint:
+    """Record that the officer has resolved a complaint.
+
+    Args:
+        session: An open database session.
+        complaint: The complaint being resolved.
+        photo_path: Storage path of the officer's proof photo, if any.
+
+    Returns:
+        The updated Complaint.
+    """
+
+    complaint.officer_status = "resolved"
+    complaint.status = "resolved"
+    complaint.resolved_at = datetime.now(timezone.utc)
+    complaint.resolved_photo_url = photo_path
+
+    await session.commit()
+
+    return complaint

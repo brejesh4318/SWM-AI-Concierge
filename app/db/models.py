@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -35,6 +35,42 @@ class Complaint(Base):
     photo_url: Mapped[str | None] = mapped_column(String(500))
 
     status: Mapped[str] = mapped_column(String(20), default="new")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Officer handling this complaint, fixed when it is filed so later
+    # changes to the local body's officer do not rewrite history.
+    officer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("officers.id", ondelete="SET NULL"), index=True
+    )
+    assigned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    # "pending" until the officer replies, then "resolved".
+    officer_status: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default="pending"
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    # Storage path of the officer's proof photo, sent back to phone_number.
+    resolved_photo_url: Mapped[str | None] = mapped_column(String(500))
+
+
+class Officer(Base):
+    __tablename__ = "officers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    # WhatsApp format: country code + number, digits only (918098059300).
+    phone: Mapped[str] = mapped_column(String(20))
+    # Matches a name in app.services.local_bodies.BODIES.
+    local_body: Mapped[str] = mapped_column(String(80), unique=True)
+    escalation_officer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("officers.id", ondelete="SET NULL")
+    )
+    is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

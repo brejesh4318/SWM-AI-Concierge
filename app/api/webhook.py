@@ -1,8 +1,19 @@
 import os
-from app.db.complaints import already_saved, save_complaint
+import traceback
+from app.db.complaints import (
+    already_saved,
+    officer_by_phone,
+    officer_for,
+    save_complaint,
+)
 from app.db.session import SessionLocal
+from app.services.officer_service import (
+    handle_officer_message,
+    is_officer_reply,
+    notify_officer,
+)
 
-from app.state.conversation_manager import load_user, persist_user
+from app.state.conversation_manager import get_state, load_user, persist_user
 
 
 from dotenv import load_dotenv
@@ -26,6 +37,7 @@ from app.services.chatbot_service import (
     process_text_message,
 )
 
+from app.services.storage import save_whatsapp_photo
 from app.services.whatsapp_service import (
     send_block_menu,
     send_complaint_menu,
@@ -118,6 +130,24 @@ async def receive_webhook(request: Request):
         await load_user(sender, session)
 
         try:
+            # An officer's number is also a normal citizen number. Only
+            # resolution-looking messages go to the officer handler.
+            officer = await officer_by_phone(session, sender)
+
+            message = data["entry"][0]["changes"][0]["value"]["messages"][0]
+
+            if officer is not None and is_officer_reply(
+                message,
+                get_state(sender),
+            ):
+                try:
+                    await handle_officer_message(session, officer, message)
+                except Exception:
+                    traceback.print_exc()
+                    await session.rollback()
+
+                return {"status": "received"}
+
             return await _process(data, session)
 
         finally:
@@ -424,9 +454,19 @@ async def _process(data: dict, session=None):
 
             if media_id:
 
+                try:
+                    photo_path = await save_whatsapp_photo(
+                        media_id,
+                        sender,
+                    )
+                except Exception:
+                    # Keep the complaint flowing; the media ID is still stored.
+                    traceback.print_exc()
+                    photo_path = media_id
+
                 result = process_photo_message(
                     user_id=sender,
-                    media_id=media_id,
+                    media_id=photo_path,
                 )
 
             else:
@@ -527,7 +567,9 @@ async def _process(data: dict, session=None):
 
             saved = await already_saved(session, wamid)
 
-            if saved is None:
+            is_new = saved is None
+
+            if is_new:
                 saved = await save_complaint(
                     session,
                     complaint,
@@ -535,6 +577,11 @@ async def _process(data: dict, session=None):
                 )
 
                 await session.commit()
+
+            officer = await officer_for(session, saved)
+
+            if is_new and officer is not None:
+                await notify_officer(officer, saved)
 
             print(
                 "\n===== COMPLAINT COMPLETED ====="
@@ -554,6 +601,7 @@ async def _process(data: dict, session=None):
                     language,
                     saved.reference_no,
                     complaint,
+                    has_officer=officer is not None,
                 ),
             )
 
@@ -567,6 +615,29 @@ async def _process(data: dict, session=None):
             "Webhook processing error:",
             repr(e),
         )
+
+        traceback.print_exc()
+
+        if session is not None:
+            await session.rollback()
+
+        try:
+            sender = _sender_of(data)
+
+            if sender is not None:
+                await send_text_message(
+                    recipient_phone=sender,
+                    message=messages.t(
+                        language_of(sender),
+                        "error_try_again",
+                    ),
+                )
+
+        except Exception as notify_error:
+            print(
+                "Could not send the error notice:",
+                repr(notify_error),
+            )
 
         return {
             "status": "received",

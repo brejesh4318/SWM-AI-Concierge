@@ -3,10 +3,18 @@
 A WhatsApp chatbot for The Nilgiris district that collects solid waste
 complaints from citizens and routes them to the District Collector.
 
-Built with the Meta WhatsApp Cloud API, FastAPI and ngrok. The bot is
-bilingual (English / Tamil), runs a guided complaint flow using WhatsApp
-interactive list and button messages, and currently runs locally against
-a Meta test number.
+Built with the Meta WhatsApp Cloud API, FastAPI, PostgreSQL and ngrok. The
+bot is bilingual (English / Tamil), runs a guided complaint flow using
+WhatsApp interactive list and button messages, and currently runs locally
+against a Meta test number.
+
+> **Status as of 2026-10-13:** the database is connected, completed
+> complaints are saved to PostgreSQL and get a reference number
+> (`NLG-2026-00001` and `-00002` were filed over real WhatsApp). Save
+> failures are now logged with a traceback, rolled back, and the citizen is
+> told to retry. Still open: a restart test, one complaint saved with no
+> type, and photo storage, which is written but not wired in. See sections
+> 12, 13 and 16.
 
 ---
 
@@ -22,11 +30,14 @@ Meta WhatsApp Cloud API
 ngrok  (development tunnel)
    |
    v
-FastAPI  ->  webhook.py      parse + route the incoming message
-             chatbot_service  state machine, decides what happens next
-             messages.py      all user-facing copy, English + Tamil
-             local_bodies.py  Nilgiris local body data + list paging
-             whatsapp_service build and send the outbound payload
+FastAPI  ->  webhook.py           parse + route the incoming message
+             conversation_manager load the user's state from the DB, persist it after
+             chatbot_service      state machine, decides what happens next
+             messages.py          all user-facing copy, English + Tamil
+             local_bodies.py      Nilgiris local body data + list paging
+             whatsapp_service     build and send the outbound payload
+             db/complaints.py     save a finished complaint, make its reference number
+             PostgreSQL           complaints, conversation_state
    |
    v
 Meta WhatsApp Cloud API
@@ -35,9 +46,11 @@ Meta WhatsApp Cloud API
 Citizen
 ```
 
-Conversation state currently lives in **memory** (`app/state/`), so it is
-lost on restart. Moving it to PostgreSQL is the next major task — see
-section 12.
+Each webhook call loads the sender's conversation from the
+`conversation_state` table, handles the message, then writes the
+conversation back (or deletes it once it is finished). A completed
+complaint is saved to `complaints` in the same request, before the receipt
+is sent.
 
 ---
 
@@ -55,7 +68,7 @@ any message
    -> location                typed text or a shared WhatsApp location pin
    -> photo?                  buttons Yes / No
    -> [photo upload]
-   -> confirmation
+   -> confirmation            receipt with the complaint reference number
 ```
 
 After the language is chosen, **every screen is in that language only**.
@@ -174,15 +187,17 @@ Solid-Waste WACB/
 │   ├── main.py                      FastAPI app
 │   │
 │   ├── api/
-│   │   └── webhook.py               GET verify + POST receive, routing
+│   │   └── webhook.py               GET verify + POST receive, routing, save on completion
 │   │
 │   ├── core/
 │   │   ├── __init__.py
 │   │   └── config.py                settings from .env (pydantic-settings)
 │   │
-│   ├── db/                          NOT yet wired into the bot
+│   ├── db/
+│   │   ├── __init__.py              currently missing (see section 12)
 │   │   ├── models.py                Complaint, ConversationStateRow
-│   │   └── session.py               async engine + session factory
+│   │   ├── session.py               async engine + session factory
+│   │   └── complaints.py            save_complaint, reference numbers, duplicate check
 │   │
 │   ├── services/
 │   │   ├── chatbot_service.py       state machine
@@ -191,10 +206,13 @@ Solid-Waste WACB/
 │   │   └── whatsapp_service.py      outbound payload builders
 │   │
 │   └── state/
-│       ├── conversation_manager.py  in-memory state (to be replaced)
+│       ├── conversation_manager.py  load/persist a user's conversation via the DB
 │       └── conversation_state.py    state enum
 │
+├── alembic/                         migrations (versions/ holds the first one)
+├── alembic.ini
 ├── .vscode/launch.json              debug configs
+├── check_db.py                      prints tables and columns, a connection check
 ├── .venv/
 ├── .env                             secrets — never commit
 ├── requirements.txt
@@ -208,7 +226,7 @@ Solid-Waste WACB/
 - Python 3.10+
 - VS Code
 - ngrok
-- PostgreSQL (local or hosted — not yet in use)
+- PostgreSQL 14 (local is in use; `Whatsapp_ChatBot` database on `localhost:5432`)
 - Meta Developer Account with a WhatsApp Cloud API app
 - Meta WhatsApp test number, WABA, Phone Number ID, access token
 
@@ -222,7 +240,7 @@ Create `.env` in the project root:
 VERIFY_TOKEN=your_webhook_verify_token
 WHATSAPP_ACCESS_TOKEN=your_meta_access_token
 PHONE_NUMBER_ID=your_phone_number_id
-DATABASE_URL=postgresql://user:password@localhost:5432/swm
+DATABASE_URL=postgresql://user:password@localhost:5432/Whatsapp_ChatBot
 DB_SSL=false
 ```
 
@@ -233,6 +251,11 @@ derives two variants from it: `postgresql+asyncpg://` for the app and
 **Do not append `?sslmode=require`.** That is a psycopg2 option and
 asyncpg crashes on it. Use `DB_SSL=true` instead — the app adds
 `sslmode` for Alembic and passes `ssl` to asyncpg itself.
+
+**Known issue:** the current `.env` produces
+`python-dotenv could not parse statement starting at line 7` on every
+start. Line 7 is a stray entry (it looks like an old `test_url=` line).
+Remove it, or wrap any value containing spaces or `#` in double quotes.
 
 Never commit `.env`. `.gitignore` should contain:
 
@@ -251,6 +274,7 @@ __pycache__/
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+alembic upgrade head
 ```
 
 ---
@@ -281,6 +305,21 @@ Callback URL to `https://NEW-NGROK-URL/webhook`.
 
 Shut down with `CTRL + C` in each terminal.
 
+## Only one server on port 8000
+
+If startup prints `[Errno 10048] ... only one usage of each socket address`,
+another uvicorn is already on port 8000. It may be an older copy running
+old code, or one started with a different Python. Find it and stop it:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000 -State Listen |
+  ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" | Select-Object ProcessId, CommandLine }
+Stop-Process -Id PID_FROM_ABOVE -Force
+```
+
+Then start the server again. Use the `.venv` Python so the same
+dependencies load every time.
+
 ## Restarting matters
 
 `--reload` only watches `.py` files. It does **not** reload on a `.env`
@@ -288,8 +327,8 @@ change, so a new access token needs a manual restart. The non-reload
 debug config does not reload at all — if a code change seems to have no
 effect, that is almost always why.
 
-Restarting also wipes all in-memory conversation state, so send `hi`
-fresh rather than continuing an existing thread.
+Conversation state is in the database, so a restart no longer resets a
+citizen's place in the flow. Saved complaints also survive restarts.
 
 ---
 
@@ -297,6 +336,9 @@ fresh rather than continuing an existing thread.
 
 **FastAPI:** open `http://127.0.0.1:8000/` — expect
 `{"message": "WhatsApp Bot is Running"}`. Swagger is at `/docs`.
+
+**Database:** `python check_db.py` should list `complaints` and
+`conversation_state` and print their columns.
 
 **ngrok:** open the HTTPS URL — same response confirms
 Internet → ngrok → FastAPI.
@@ -307,7 +349,7 @@ Internet → ngrok → FastAPI.
 https://YOUR-NGROK-URL/webhook?hub.mode=subscribe&hub.verify_token=YOUR_TOKEN&hub.challenge=987654
 ```
 
-Expect `987654`.
+Expect `987654`. A wrong token returns `403 Verification failed`.
 
 **POST locally:**
 
@@ -327,6 +369,13 @@ Expect `{"status":"received"}`.
 **Real message:** send `hi` from the authorised test recipient. The bot
 should reply with the Thuyan intro and the language buttons.
 
+**Checking a saved complaint:**
+
+```sql
+select reference_no, complaint_type, local_body, ward_number, status, created_at
+from complaints order by created_at desc;
+```
+
 ---
 
 # 11. Error Handling
@@ -343,6 +392,11 @@ INFO: "POST /webhook HTTP/1.1" 200 OK      <- correct
 ```
 
 An error in the log alongside `200 OK` is the intended combination.
+
+When processing fails, the handler prints the error and full traceback,
+rolls the database session back, and sends the citizen an
+`error_try_again` message (English and Tamil) so a failed save is not
+silent. Still check the terminal log after a test complaint.
 
 ## Access tokens expire
 
@@ -363,27 +417,42 @@ Token → expiry **Never**, scopes `whatsapp_business_messaging` and
 
 ---
 
-# 12. Database — In Progress
+# 12. Database — Wired, Not Yet Verified
 
-The `complaints` and `conversation_state` tables are designed but
-**nothing in the bot reads or writes them yet**. Completed complaints are
-currently only `print()`ed to the terminal and then lost.
+Tables and code are in place:
 
-Done:
-
-- [x] `asyncpg` and `pydantic-settings` installed
+- [x] `asyncpg`, `psycopg2-binary`, `alembic`, `pydantic-settings` installed
 - [x] `app/core/config.py` — settings, async/sync URL derivation
-- [x] `app/db/models.py` — `Complaint`, `ConversationStateRow`
+- [x] `app/db/models.py` — `Complaint` (`reference_no` and `wamid` are unique),
+      `ConversationStateRow`
 - [x] `app/db/session.py` — async engine, session factory, dependency
+- [x] `app/db/complaints.py` — `save_complaint`, `next_reference`
+      (`NLG-2026-00001`, restarting each year), `already_saved` (duplicate check)
+- [x] `app/state/conversation_manager.py` — `load_user` / `persist_user`
+      read and write the `conversation_state` table on each webhook call
+- [x] Alembic migration `alembic/versions/ddbcb8b1fc96_complaints_and_conversation_state.py`
+- [x] `DATABASE_URL` connects to `Whatsapp_ChatBot` on `localhost:5432`
+- [x] `complaints` and `conversation_state` tables exist
+- [x] Two real complaints saved over WhatsApp (`NLG-2026-00001`, `NLG-2026-00002`),
+      with reference numbers, local body, ward, location and photo media id
 
-Still to do for step 1:
+Not yet confirmed:
 
-- [ ] `app/db/__init__.py` (empty file, currently missing)
-- [ ] A working `DATABASE_URL` — the current one fails with
-      `password authentication failed for user "postgres"`
-- [ ] `alembic init alembic`, point `env.py` at `Base.metadata` and
-      `get_settings().sync_url`, remove `sqlalchemy.url` from `alembic.ini`
-- [ ] `alembic revision --autogenerate` then `alembic upgrade head`
+- [ ] A complaint and conversation survive a server restart
+- [ ] `NLG-2026-00001` has an empty `complaint_type` and no `custom_complaint`.
+      The state machine sets one of them at the menu step, so this complaint
+      probably came from an older copy of the code, but it has not been
+      reproduced either way. Complete one more complaint and check
+- [ ] `app/db/__init__.py` is still missing (Python still imports the package,
+      but adding the empty file keeps tooling happy)
+
+Known gaps:
+
+- Complaints are still `print()`ed to the terminal as well as saved.
+- `photo_url` holds the Meta media id, which expires after about 30 days,
+  not a stored image.
+- The `wamid` duplicate check only protects against Meta re-delivery of the
+  same message. It does not stop a citizen filing twice on purpose.
 
 ---
 
@@ -403,29 +472,32 @@ Still to do for step 1:
 - [x] Local body type → block → local body selection, with paging
 - [x] Ward number capture and validation
 - [x] Location capture (typed or WhatsApp location pin)
-- [x] Photo question and photo upload
-- [x] Conversation state machine (in memory)
+- [x] Photo question and photo upload handling in the flow
+- [x] Conversation state stored in PostgreSQL (`conversation_state`)
 - [x] Restart / new complaint handling
 - [x] WhatsApp field length validation at import time
 - [x] Webhook error handling that never triggers Meta retries
+- [x] Database connection, tables created by Alembic
+- [x] Complaint save with reference number (`NLG-YYYY-NNNNN`) in the receipt
+- [x] Duplicate protection on the Meta `wamid`, with a unique constraint
+- [x] Save errors are logged with a traceback, rolled back, and the citizen
+      is told to retry
+
+## In progress
+
+- [ ] **Restart test** — restart the server and check saved complaints and
+      conversations are still in the database
+- [ ] **Photo storage** — storage backend to be decided (GCP planned)
 
 ## Not completed
 
-- [ ] **Database wiring** — see section 12
-- [ ] **Persist conversation state** (currently lost on restart, and
-      blocks running more than one uvicorn worker)
-- [ ] **Store complaints** so they reach the District Collector
-- [ ] **Complaint reference number** returned to the citizen
-- [ ] **Photo storage** — `photo_media_id` expires after ~30 days, so
-      images must be downloaded and stored in object storage
-- [ ] **Duplicate protection** — store the WhatsApp `wamid` with a unique
-      constraint; Meta re-delivers and can file the same complaint twice
 - [ ] Tamil review by a native speaker
 - [ ] Admin view / export for the Collector's office
 - [ ] Structured logging
 - [ ] Production hosting (replace ngrok with a stable HTTPS backend)
 - [ ] Production WhatsApp number, permanent token, business verification
 - [ ] Monitoring, rate limiting, Docker deployment
+- [ ] Automated backups (`pg_dump`) and a hosted Postgres for real use
 
 ---
 
@@ -454,6 +526,9 @@ used by us to authenticate requests to Meta.
 Restart it. `--reload` ignores `.env`, and the non-reload debug config
 never reloads.
 
+**`[Errno 10048]` on startup** — another server is on port 8000. See
+section 9.
+
 **`401` / `code 190`** — the access token expired. See section 11.
 
 **`400 (#131009)` "Parameter value is not valid"** — an interactive field
@@ -465,12 +540,18 @@ console. Set `PYTHONUTF8=1`.
 **`invalid dsn: invalid connection option "sslmode"`** — remove
 `?sslmode=require` from `DATABASE_URL` and set `DB_SSL=true`.
 
+**`password authentication failed for user "postgres"`** — the password in
+`DATABASE_URL` is wrong. Check it against the local Postgres install.
+
 **`python-dotenv could not parse statement`** — a malformed line in
 `.env`. Values containing `#`, spaces or quotes need wrapping in double
 quotes.
 
 **`uvicorn is not recognized`** — activate the venv, or use
 `python -m uvicorn app.main:app --reload`.
+
+**`Webhook processing error` in the log, but the citizen got no reply** —
+a save or send failed. Read the traceback above that line.
 
 **Webhook verification fails** — check FastAPI and ngrok are running, the
 Callback URL includes `/webhook`, the verify token matches `.env`, and the
@@ -481,12 +562,19 @@ the app and the `messages` field is subscribed.
 
 ---
 
-# 16. Next Step
+# 16. Next Steps
 
-Finish the database work in section 12, then switch
-`conversation_manager` from dicts to the `conversation_state` table. That
-single change fixes restart data loss and unlocks running more than one
-worker.
+In order:
 
-After that, persist complaints and return a reference number to the
-citizen.
+1. **Restart test.** Restart the server and check the `complaints` and
+   `conversation_state` tables still hold their rows. Then complete one more
+   complaint to see whether the empty `complaint_type` on `NLG-2026-00001`
+   happens again.
+2. **Add photo storage.** Pick a storage backend (GCP), download the photo
+   from Meta when a complaint is completed, save its location in `photo_url`,
+   and produce a usable link for the Collector's office.
+3. **Remove `print()` output** for completed complaints once the database
+   path is confirmed.
+4. **Back up the database** with `pg_dump` on a schedule, and move to a
+   hosted Postgres before any real citizen uses the bot.
+5. **Get Tamil reviewed** by a native speaker before going live.
