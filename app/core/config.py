@@ -8,6 +8,12 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str
     DB_SSL: bool = False
+    # When set, the admin API requires it in the X-Admin-Token header.
+    ADMIN_TOKEN: str = ""
+    # DEBUG, INFO, WARNING or ERROR.
+    LOG_LEVEL: str = "INFO"
+    # One JSON object per line, for log aggregators.
+    LOG_JSON: bool = False
 
     @property
     def async_url(self) -> str:

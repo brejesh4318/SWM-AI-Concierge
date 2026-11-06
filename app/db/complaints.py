@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Saving a finished complaint and giving it a reference number."""
 
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Complaint, Officer
 
+logger = logging.getLogger(__name__)
 
 REFERENCE_PREFIX = "NLG"
 
@@ -101,6 +103,10 @@ async def save_complaint(
         row.officer_id = officer.id
         row.assigned_at = datetime.now(timezone.utc)
 
+    logger.debug(
+        "Flushed %s (officer_id=%s)", row.reference_no, row.officer_id
+    )
+
     return row
 
 
@@ -183,22 +189,27 @@ async def officer_by_phone(
 
 async def pending_for_officer(
     session: AsyncSession,
-    officer_id: int,
+    phone: str,
 ) -> list[Complaint]:
-    """List an officer's complaints that are still unresolved, oldest first.
+    """List the unresolved complaints in an officer's local bodies.
+
+    Complaints are matched to officers by local body, so a number that
+    covers several local bodies sees all of them.
 
     Args:
         session: An open database session.
-        officer_id: The officer's id.
+        phone: The officer's number, digits only.
 
     Returns:
-        The pending Complaint rows.
+        The pending Complaint rows, oldest first.
     """
 
     result = await session.scalars(
         select(Complaint)
+        .join(Officer, Officer.local_body == Complaint.local_body)
         .where(
-            Complaint.officer_id == officer_id,
+            Officer.phone == phone,
+            Officer.is_active.is_(True),
             Complaint.officer_status == "pending",
         )
         .order_by(Complaint.created_at)
@@ -210,23 +221,55 @@ async def pending_for_officer(
 async def complaint_by_reference(
     session: AsyncSession,
     reference_no: str,
-    officer_id: int,
+    phone: str,
 ) -> Complaint | None:
-    """Find one of an officer's complaints by reference number.
+    """Find a complaint by reference number if this number may resolve it.
 
     Args:
         session: An open database session.
         reference_no: For example NLG-2026-00001.
-        officer_id: Only complaints assigned to this officer match.
+        phone: Only an active officer with this number on the complaint's
+            local body matches.
 
     Returns:
         The Complaint, or None.
     """
 
     return await session.scalar(
-        select(Complaint).where(
+        select(Complaint)
+        .join(Officer, Officer.local_body == Complaint.local_body)
+        .where(
             Complaint.reference_no == reference_no.upper(),
-            Complaint.officer_id == officer_id,
+            Officer.phone == phone,
+            Officer.is_active.is_(True),
+        )
+    )
+
+
+async def complaint_by_notification(
+    session: AsyncSession,
+    wamid: str,
+    phone: str,
+) -> Complaint | None:
+    """Find the complaint whose officer alert a message was a reply to.
+
+    Args:
+        session: An open database session.
+        wamid: The id of the message that was swiped-to-reply.
+        phone: Only an active officer with this number on the complaint's
+            local body matches.
+
+    Returns:
+        The Complaint, or None.
+    """
+
+    return await session.scalar(
+        select(Complaint)
+        .join(Officer, Officer.local_body == Complaint.local_body)
+        .where(
+            Complaint.notification_wamid == wamid,
+            Officer.phone == phone,
+            Officer.is_active.is_(True),
         )
     )
 

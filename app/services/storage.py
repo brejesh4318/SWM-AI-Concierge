@@ -1,9 +1,12 @@
+import logging
 import os
 
 import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 SUPABASE_KEY = os.getenv("SUPABASE_SECRET_KEY")
@@ -30,6 +33,8 @@ async def save_whatsapp_photo(media_id: str, user_id: str) -> str:
     """
     whatsapp_headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
 
+    logger.info("Fetching WhatsApp media %s", media_id)
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         meta = await client.get(
             f"https://graph.facebook.com/v26.0/{media_id}",
@@ -41,6 +46,13 @@ async def save_whatsapp_photo(media_id: str, user_id: str) -> str:
 
         image = await client.get(info["url"], headers=whatsapp_headers)
         image.raise_for_status()
+
+        logger.debug(
+            "Downloaded media %s (%s, %d bytes)",
+            media_id,
+            mime_type,
+            len(image.content),
+        )
 
         path = f"{user_id}/{media_id}.{mime_type.split('/')[-1]}"
 
@@ -55,5 +67,7 @@ async def save_whatsapp_photo(media_id: str, user_id: str) -> str:
             content=image.content,
         )
         upload.raise_for_status()
+
+    logger.info("Stored photo at %s/%s", BUCKET, path)
 
     return path

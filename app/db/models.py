@@ -54,6 +54,11 @@ class Complaint(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    # WhatsApp id of the alert sent to the officer. A swipe-reply to that
+    # message carries this id, which tells us which complaint it resolves.
+    notification_wamid: Mapped[str | None] = mapped_column(
+        String(128), index=True
+    )
     # Storage path of the officer's proof photo, sent back to phone_number.
     resolved_photo_url: Mapped[str | None] = mapped_column(String(500))
 

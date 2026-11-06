@@ -1,5 +1,6 @@
+import logging
 import os
-import traceback
+from app.core.logging import bind_user, mask_phone, timed
 from app.db.complaints import (
     already_saved,
     officer_by_phone,
@@ -50,6 +51,8 @@ from app.services.whatsapp_service import (
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
@@ -77,9 +80,17 @@ async def verify_webhook(request: Request):
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
 
+        logger.info("Webhook verification succeeded")
+
         return PlainTextResponse(
             challenge or ""
         )
+
+    logger.warning(
+        "Webhook verification failed (mode=%s, token_matched=%s)",
+        mode,
+        token == VERIFY_TOKEN,
+    )
 
     return PlainTextResponse(
         "Verification failed",
@@ -123,27 +134,42 @@ async def receive_webhook(request: Request):
 
     if sender is None:
         # Delivery receipts and status updates carry no message.
+        logger.debug("Ignoring webhook call with no message")
         return {"status": "received"}
 
-    async with SessionLocal() as session:
+    bind_user(sender)
 
-        await load_user(sender, session)
+    async with SessionLocal() as session:
+        
+        with timed("load_user"):
+            await load_user(sender, session)
 
         try:
-            # An officer's number is also a normal citizen number. Only
-            # resolution-looking messages go to the officer handler.
-            officer = await officer_by_phone(session, sender)
+            with timed("officer_by_phone"):
+                officer = await officer_by_phone(session, sender)
 
             message = data["entry"][0]["changes"][0]["value"]["messages"][0]
 
-            if officer is not None and is_officer_reply(
+            logger.info(
+                "Incoming %s message %s (state=%s, officer=%s)",
+                message.get("type"),
+                message.get("id"),
+                get_state(sender).value,
+                officer is not None,
+            )
+
+            if officer is not None and await is_officer_reply(
+                session,
+                officer,
                 message,
                 get_state(sender),
             ):
+                logger.info("Routing message to the officer handler")
+
                 try:
                     await handle_officer_message(session, officer, message)
                 except Exception:
-                    traceback.print_exc()
+                    logger.exception("Officer handler failed")
                     await session.rollback()
 
                 return {"status": "received"}
@@ -151,7 +177,8 @@ async def receive_webhook(request: Request):
             return await _process(data, session)
 
         finally:
-            await persist_user(sender, session)
+            with timed("persist_user"):
+                await persist_user(sender, session)
 
 
 async def _process(data: dict, session=None):
@@ -461,7 +488,10 @@ async def _process(data: dict, session=None):
                     )
                 except Exception:
                     # Keep the complaint flowing; the media ID is still stored.
-                    traceback.print_exc()
+                    logger.exception(
+                        "Could not store photo %s; keeping the media id",
+                        media_id,
+                    )
                     photo_path = media_id
 
                 result = process_photo_message(
@@ -500,6 +530,13 @@ async def _process(data: dict, session=None):
         result_type = result["type"]
 
         language = language_of(sender)
+
+        logger.info(
+            "Replying with %s (language=%s, state=%s)",
+            result_type,
+            language or "-",
+            get_state(sender).value,
+        )
 
         if result_type == "language_menu":
 
@@ -578,22 +615,34 @@ async def _process(data: dict, session=None):
 
                 await session.commit()
 
+                logger.info(
+                    "Complaint %s saved (type=%s, local_body=%s)",
+                    saved.reference_no,
+                    saved.complaint_type,
+                    saved.local_body,
+                )
+            else:
+                logger.warning(
+                    "Duplicate delivery of %s; complaint %s already saved",
+                    wamid,
+                    saved.reference_no,
+                )
+
             officer = await officer_for(session, saved)
 
+            if officer is None:
+                logger.warning(
+                    "Complaint %s has no active officer for %s",
+                    saved.reference_no,
+                    saved.local_body,
+                )
+
             if is_new and officer is not None:
-                await notify_officer(officer, saved)
+                saved.notification_wamid = await notify_officer(
+                    officer, saved
+                )
 
-            print(
-                "\n===== COMPLAINT COMPLETED ====="
-            )
-
-            print(
-                complaint
-            )
-
-            print(
-                "================================\n"
-            )
+                await session.commit()
 
             await send_text_message(
                 recipient_phone=sender,
@@ -609,14 +658,9 @@ async def _process(data: dict, session=None):
             "status": "received",
         }
 
-    except Exception as e:
+    except Exception:
 
-        print(
-            "Webhook processing error:",
-            repr(e),
-        )
-
-        traceback.print_exc()
+        logger.exception("Webhook processing error")
 
         if session is not None:
             await session.rollback()
@@ -633,10 +677,10 @@ async def _process(data: dict, session=None):
                     ),
                 )
 
-        except Exception as notify_error:
-            print(
-                "Could not send the error notice:",
-                repr(notify_error),
+        except Exception:
+            logger.exception(
+                "Could not send the error notice to %s",
+                mask_phone(sender),
             )
 
         return {

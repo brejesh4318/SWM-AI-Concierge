@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -5,6 +6,7 @@ from app.db.models import ConversationStateRow
 
 from app.state.conversation_state import ConversationState
 
+logger = logging.getLogger(__name__)
 
 conversation_states: dict[str, ConversationState] = {}
 
@@ -43,6 +45,15 @@ def set_state(
         user_id: The user's phone number.
         state: The state to store.
     """
+    previous = conversation_states.get(user_id)
+
+    if previous != state:
+        logger.info(
+            "State %s -> %s",
+            previous.value if previous else "-",
+            state.value,
+        )
+
     conversation_states[user_id] = state
 
 
@@ -74,6 +85,9 @@ def save_data(
         key: The name of the field to store.
         value: The value to store under that key.
     """
+    # Only the key is logged; values hold personal details.
+    logger.debug("Saved answer '%s'", key)
+
     data = get_data(user_id)
     data[key] = value
 
@@ -119,6 +133,8 @@ def set_language(
         user_id: The user's phone number.
         language: The language code to store.
     """
+    logger.info("Language set to %s", language)
+
     conversation_language[user_id] = language
 
 
@@ -159,7 +175,10 @@ async def load_user(
     row = await session.get(ConversationStateRow, user_id)
 
     if row is None:
+        logger.debug("No saved conversation; starting fresh")
         return
+
+    logger.debug("Loaded saved conversation in state %s", row.state)
 
     conversation_states[user_id] = ConversationState(row.state)
     conversation_data[user_id] = dict(row.data or {})
@@ -196,6 +215,7 @@ async def persist_user(
         # forget_user() was called, so remove the row entirely.
         if row is not None:
             await session.delete(row)
+            logger.info("Conversation cleared")
 
     elif row is None:
 
@@ -215,6 +235,8 @@ async def persist_user(
         row.data = data
 
     await session.commit()
+
+    logger.debug("Conversation persisted (state=%s)", state)
 
     conversation_states.pop(user_id, None)
     conversation_data.pop(user_id, None)

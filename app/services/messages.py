@@ -224,7 +224,7 @@ TEXT = {
         "receipt_where": "{local_body}, Ward {ward}",
         "receipt_next": (
             "Sent to the officer responsible. You will get a "
-            "message here once it is resolved."
+            "message here once the issue is resolved under 48 hours."
         ),
         "receipt_no_officer": (
             "No officer is currently listed for this local body. "

@@ -12,7 +12,10 @@ settings = get_settings()
 
 engine = create_async_engine(
     settings.async_url,
-    pool_pre_ping=True,
+    pool_pre_ping=False,
+    pool_size=5,
+    max_overflow=10,
+    pool_recycle=1800,
     connect_args={"ssl": "require"} if settings.DB_SSL else {},
 )
 

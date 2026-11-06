@@ -8,13 +8,13 @@ bot is bilingual (English / Tamil), runs a guided complaint flow using
 WhatsApp interactive list and button messages, and currently runs locally
 against a Meta test number.
 
-> **Status as of 2026-10-13:** the database is connected, completed
-> complaints are saved to PostgreSQL and get a reference number
-> (`NLG-2026-00001` and `-00002` were filed over real WhatsApp). Save
-> failures are now logged with a traceback, rolled back, and the citizen is
-> told to retry. Still open: a restart test, one complaint saved with no
-> type, and photo storage, which is written but not wired in. See sections
-> 12, 13 and 16.
+> **Status as of 2026-10-23:** completed complaints are saved to PostgreSQL
+> with a reference number, assigned to the officer for that local body, and
+> sent to the officer on WhatsApp. Officers resolve a complaint by replying
+> with a photo, and the citizen is told. Photos are stored in Supabase
+> Storage. A read-only admin dashboard (`admin-ui/`) and a pytest suite
+> (`tests/`) are in place. Still open: a restart test, officer escalation,
+> and Tamil review. See sections 12, 13 and 16.
 
 ---
 
@@ -36,8 +36,11 @@ FastAPI  ->  webhook.py           parse + route the incoming message
              messages.py          all user-facing copy, English + Tamil
              local_bodies.py      Nilgiris local body data + list paging
              whatsapp_service     build and send the outbound payload
-             db/complaints.py     save a finished complaint, make its reference number
-             PostgreSQL           complaints, conversation_state
+             db/complaints.py     save a complaint, reference numbers, officer lookup
+             officer_service      alert the officer, handle their resolution reply
+             storage.py           copy WhatsApp photos into Supabase Storage
+             api/admin.py         read-only /admin/api/* for the dashboard
+             PostgreSQL           complaints, officers, conversation_state
    |
    v
 Meta WhatsApp Cloud API
@@ -49,8 +52,9 @@ Citizen
 Each webhook call loads the sender's conversation from the
 `conversation_state` table, handles the message, then writes the
 conversation back (or deletes it once it is finished). A completed
-complaint is saved to `complaints` in the same request, before the receipt
-is sent.
+complaint is saved to `complaints` in the same request, assigned to the
+officer for its local body, and the officer is alerted before the citizen's
+receipt is sent.
 
 ---
 
@@ -187,32 +191,40 @@ Solid-Waste WACB/
 │   ├── main.py                      FastAPI app
 │   │
 │   ├── api/
-│   │   └── webhook.py               GET verify + POST receive, routing, save on completion
+│   │   ├── webhook.py               GET verify + POST receive, routing, save on completion
+│   │   └── admin.py                 read-only /admin/api/* for the dashboard
 │   │
 │   ├── core/
 │   │   ├── __init__.py
 │   │   └── config.py                settings from .env (pydantic-settings)
 │   │
 │   ├── db/
-│   │   ├── __init__.py              currently missing (see section 12)
-│   │   ├── models.py                Complaint, ConversationStateRow
+│   │   ├── models.py                Complaint, Officer, ConversationStateRow
 │   │   ├── session.py               async engine + session factory
-│   │   └── complaints.py            save_complaint, reference numbers, duplicate check
+│   │   └── complaints.py            save_complaint, reference numbers, officer lookup, mark_resolved
 │   │
 │   ├── services/
 │   │   ├── chatbot_service.py       state machine
 │   │   ├── messages.py              all copy, en/ta, + limit validation
 │   │   ├── local_bodies.py          local body data + paging
-│   │   └── whatsapp_service.py      outbound payload builders
+│   │   ├── officer_service.py       officer alerts and resolution replies
+│   │   ├── storage.py               WhatsApp photo -> Supabase Storage
+│   │   └── whatsapp_service.py      outbound payload builders (text, list, button, template, image)
 │   │
 │   └── state/
 │       ├── conversation_manager.py  load/persist a user's conversation via the DB
 │       └── conversation_state.py    state enum
 │
-├── alembic/                         migrations (versions/ holds the first one)
+├── admin-ui/                        React + Vite admin dashboard
+├── tests/                           pytest suite
+├── alembic/                         migrations (versions/)
 ├── alembic.ini
 ├── .vscode/launch.json              debug configs
 ├── check_db.py                      prints tables and columns, a connection check
+├── seed_officers.py                 one test officer per local body
+├── test_send.py                     manual outbound send check
+├── pytest.ini
+├── requirements-dev.txt             pytest, pytest-asyncio, aiosqlite
 ├── .venv/
 ├── .env                             secrets — never commit
 ├── requirements.txt
@@ -226,6 +238,8 @@ Solid-Waste WACB/
 - Python 3.10+
 - VS Code
 - ngrok
+- Node.js 18+ (only for the admin dashboard)
+- A Supabase project with a storage bucket (photo storage)
 - PostgreSQL 14 (local is in use; `Whatsapp_ChatBot` database on `localhost:5432`)
 - Meta Developer Account with a WhatsApp Cloud API app
 - Meta WhatsApp test number, WABA, Phone Number ID, access token
@@ -242,7 +256,41 @@ WHATSAPP_ACCESS_TOKEN=your_meta_access_token
 PHONE_NUMBER_ID=your_phone_number_id
 DATABASE_URL=postgresql://user:password@localhost:5432/Whatsapp_ChatBot
 DB_SSL=false
+OFFICER_TEMPLATE_NAME=new_complaint_alert
+OFFICER_TEMPLATE_LANG=en
+ADMIN_TOKEN=optional_token_for_the_admin_api
+SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+SUPABASE_SECRET_KEY=your_supabase_service_key
+SUPABASE_BUCKET=complaint-photos
+LOG_LEVEL=INFO
+LOG_JSON=false
 ```
+
+`LOG_LEVEL` is `DEBUG`, `INFO`, `WARNING` or `ERROR`. Every log line carries a
+per-request id (also returned in the `X-Request-ID` header) and the user's
+phone number with all but the last four digits masked. Set `LOG_JSON=true` for
+one JSON object per line. Tokens and message text are never logged.
+
+`ADMIN_TOKEN` is optional but should be set before the server is exposed
+(see the Admin dashboard section). `SUPABASE_BUCKET` defaults to
+`complaint-photos`; a `/rest/v1` suffix on `SUPABASE_URL` is stripped.
+
+**Officer alert template.** WhatsApp only allows plain text within 24 hours
+of the recipient last messaging the bot. Otherwise the alert falls back to
+an approved template. Create it in Meta Business Manager (category
+Utility) with this body, and put its name and language in `.env`:
+
+```
+New complaint {{1}}
+Type: {{2}}
+Area: {{3}}
+Map: {{4}}
+
+Reply to this message with a photo of the resolved issue.
+```
+
+Officers can resolve a complaint by swipe-replying to its alert with a
+photo, with no reference number needed. See the next section.
 
 `DATABASE_URL` is stored in plain `postgresql://` form. `config.py`
 derives two variants from it: `postgresql+asyncpg://` for the app and
@@ -268,6 +316,33 @@ __pycache__/
 
 ---
 
+## Officers and resolution
+
+Each local body has one officer (`officers` table; run
+`python seed_officers.py` to create a test officer per local body, all on
+one test phone). When a complaint completes, `officer_for` picks the officer
+for its local body and `officer_service.notify_officer` sends the alert as
+plain text, falling back to the template above when the officer is outside
+the 24-hour window. The alert's WhatsApp id is saved in
+`complaints.notification_wamid`.
+
+An officer resolves a complaint by sending a photo that:
+
+- is a swipe-reply to the alert, or
+- has the reference number (`NLG-2026-00001`) in its caption, or
+- is the only pending complaint they have.
+
+The complaint gets `officer_status = resolved` and `resolved_at`, the photo
+is stored under `resolved/<reference>/`, and the citizen receives the
+photo with a resolved notice in their language. An officer with several
+pending complaints and no reference is asked to resend with one.
+
+Photos from citizens (`photo_url`) and officers (`resolved_photo_url`) are
+downloaded from Meta and uploaded to Supabase Storage by `storage.py`; the
+object path is saved. If an upload fails, the Meta media id is kept instead.
+
+---
+
 # 8. First-Time Setup
 
 ```powershell
@@ -275,6 +350,7 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 alembic upgrade head
+python seed_officers.py     # optional: test officers
 ```
 
 ---
@@ -299,6 +375,9 @@ Or press **F5** in VS Code and pick **FastAPI: uvicorn (reload)**.
 ```powershell
 ngrok http 8000
 ```
+cd admin-ui
+
+'''UI - npm run dev'''
 
 Keep both open. If the ngrok URL changed, update the Meta webhook
 Callback URL to `https://NEW-NGROK-URL/webhook`.
@@ -366,6 +445,16 @@ Expect `{"status":"received"}`.
 - WABA: `2495360760940821`
 - App: `swm`, App ID `1914009699558609`
 
+**Tests:**
+
+```powershell9
+pip install -r requirements-dev.txt
+pytest
+```
+
+Tests live in `tests/` and use an in-memory SQLite database (`aiosqlite`),
+so they need no Postgres or Meta credentials.
+
 **Real message:** send `hi` from the authorised test recipient. The bot
 should reply with the Thuyan intro and the language buttons.
 
@@ -430,7 +519,10 @@ Tables and code are in place:
       (`NLG-2026-00001`, restarting each year), `already_saved` (duplicate check)
 - [x] `app/state/conversation_manager.py` — `load_user` / `persist_user`
       read and write the `conversation_state` table on each webhook call
-- [x] Alembic migration `alembic/versions/ddbcb8b1fc96_complaints_and_conversation_state.py`
+- [x] `Officer` model, and officer / status / resolution / `notification_wamid`
+      columns on `Complaint`
+- [x] Alembic migrations in `alembic/versions/`: base tables, officers,
+      complaint officer status, notification wamid
 - [x] `DATABASE_URL` connects to `Whatsapp_ChatBot` on `localhost:5432`
 - [x] `complaints` and `conversation_state` tables exist
 - [x] Two real complaints saved over WhatsApp (`NLG-2026-00001`, `NLG-2026-00002`),
@@ -443,14 +535,12 @@ Not yet confirmed:
       The state machine sets one of them at the menu step, so this complaint
       probably came from an older copy of the code, but it has not been
       reproduced either way. Complete one more complaint and check
-- [ ] `app/db/__init__.py` is still missing (Python still imports the package,
-      but adding the empty file keeps tooling happy)
 
 Known gaps:
 
 - Complaints are still `print()`ed to the terminal as well as saved.
-- `photo_url` holds the Meta media id, which expires after about 30 days,
-  not a stored image.
+- If a Supabase upload fails, `photo_url` falls back to the Meta media id,
+  which expires after about 30 days.
 - The `wamid` duplicate check only protects against Meta re-delivery of the
   same message. It does not stop a citizen filing twice on purpose.
 
@@ -482,17 +572,24 @@ Known gaps:
 - [x] Duplicate protection on the Meta `wamid`, with a unique constraint
 - [x] Save errors are logged with a traceback, rolled back, and the citizen
       is told to retry
+- [x] Officers per local body, assigned on save and alerted on WhatsApp
+      (text, with template fallback)
+- [x] Officer resolution by photo reply; citizen notified with the photo
+- [x] Photo storage in Supabase Storage (citizen and resolution photos)
+- [x] Read-only admin dashboard and `/admin/api/*`
+- [x] pytest suite
 
 ## In progress
 
 - [ ] **Restart test** — restart the server and check saved complaints and
       conversations are still in the database
-- [ ] **Photo storage** — storage backend to be decided (GCP planned)
+- [ ] **Officer escalation** — `escalation_officer_id` exists on `officers`
+      but nothing escalates an unresolved complaint yet
 
 ## Not completed
 
 - [ ] Tamil review by a native speaker
-- [ ] Admin view / export for the Collector's office
+- [ ] Export for the Collector's office (the dashboard is view-only)
 - [ ] Structured logging
 - [ ] Production hosting (replace ngrok with a stable HTTPS backend)
 - [ ] Production WhatsApp number, permanent token, business verification
@@ -570,11 +667,34 @@ In order:
    `conversation_state` tables still hold their rows. Then complete one more
    complaint to see whether the empty `complaint_type` on `NLG-2026-00001`
    happens again.
-2. **Add photo storage.** Pick a storage backend (GCP), download the photo
-   from Meta when a complaint is completed, save its location in `photo_url`,
-   and produce a usable link for the Collector's office.
+2. **Escalate stale complaints** to the officer's `escalation_officer_id`
+   when they stay unresolved.
 3. **Remove `print()` output** for completed complaints once the database
    path is confirmed.
 4. **Back up the database** with `pg_dump` on a schedule, and move to a
    hosted Postgres before any real citizen uses the bot.
 5. **Get Tamil reviewed** by a native speaker before going live.
+
+
+---
+
+# Admin dashboard
+
+A read-only React dashboard in `admin-ui/`, backed by the `/admin/api/*`
+endpoints in `app/api/admin.py`. Pages: Overview (key numbers and charts),
+Complaints (filter, search, expand), Officers, Conversations (chats in
+progress) and Database (every table's columns, row counts and latest rows).
+
+```powershell
+# Terminal 1: API
+uvicorn app.main:app --reload
+# Terminal 2: dashboard at http://localhost:5173
+cd admin-ui
+npm install
+npm run dev
+```
+
+Set `ADMIN_TOKEN` in `.env` to require a token; the dashboard asks for it
+on first load. **If it is unset the API is open**, and the Database and
+Conversations pages expose citizens' phone numbers, so set it before the
+server is reachable from outside (ngrok included).
