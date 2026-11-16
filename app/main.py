@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 
+from app.api.admin import login_router
 from app.api.admin import router as admin_router
 from app.api.webhook import router as webhook_router
 from app.core.config import get_settings
@@ -27,6 +28,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(webhook_router)
+app.include_router(login_router)
 app.include_router(admin_router)
 
 

@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
 """Read-only endpoints that feed the admin dashboard."""
 
+import hashlib
+import hmac
 import logging
 import secrets
+import time
 
 import httpx
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import Text, cast, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,23 +23,101 @@ from app.services.storage import BUCKET, SUPABASE_KEY, SUPABASE_PROJECT_URL
 logger = logging.getLogger(__name__)
 
 
+def _sign(expires: int) -> str:
+    """Return the HMAC signature for a session expiring at ``expires``."""
+
+    settings = get_settings()
+    key = (settings.ADMIN_SECRET or settings.ADMIN_PASSWORD).encode()
+
+    return hmac.new(key, str(expires).encode(), hashlib.sha256).hexdigest()
+
+
+def _make_session_token() -> str:
+    """Create a signed, expiring token for a logged-in admin."""
+
+    expires = int(time.time()) + get_settings().ADMIN_SESSION_HOURS * 3600
+
+    return f"{expires}.{_sign(expires)}"
+
+
+def _session_token_valid(token: str) -> bool:
+    """Check a session token's signature and expiry."""
+
+    expires, _, signature = token.partition(".")
+
+    if not expires.isdigit() or int(expires) < time.time():
+        return False
+
+    return secrets.compare_digest(signature, _sign(int(expires)))
+
+
 async def require_admin(x_admin_token: str | None = Header(default=None)):
-    """Reject requests that lack the admin token, when one is configured.
+    """Reject requests that lack a valid login session or admin token.
+
+    Auth is enforced when ADMIN_PASSWORD or ADMIN_TOKEN is configured.
 
     Args:
         x_admin_token: Value of the X-Admin-Token request header.
 
     Raises:
-        HTTPException: 401 if ADMIN_TOKEN is set and the header differs.
+        HTTPException: 401 if the header is neither a valid session
+            token nor the static ADMIN_TOKEN.
     """
 
-    expected = get_settings().ADMIN_TOKEN
+    settings = get_settings()
 
-    if expected and not secrets.compare_digest(
-        x_admin_token or "", expected
+    if not (settings.ADMIN_PASSWORD or settings.ADMIN_TOKEN):
+        return
+
+    supplied = x_admin_token or ""
+
+    if settings.ADMIN_PASSWORD and _session_token_valid(supplied):
+        return
+
+    if settings.ADMIN_TOKEN and secrets.compare_digest(
+        supplied, settings.ADMIN_TOKEN
     ):
-        logger.warning("Admin request rejected: invalid token")
-        raise HTTPException(status_code=401, detail="Invalid admin token")
+        return
+
+    logger.warning("Admin request rejected: invalid token")
+    raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+
+
+# Not guarded: this is how a user obtains a session token.
+login_router = APIRouter(prefix="/admin/api", tags=["admin"])
+
+
+@login_router.post("/login")
+async def login(body: LoginBody):
+    """Exchange a username and password for a session token.
+
+    Raises:
+        HTTPException: 401 on wrong credentials, 503 if no password is
+            configured on the server.
+    """
+
+    settings = get_settings()
+
+    if not settings.ADMIN_PASSWORD:
+        raise HTTPException(status_code=503, detail="Login not configured")
+
+    ok_user = secrets.compare_digest(
+        body.username.encode(), settings.ADMIN_USERNAME.encode()
+    )
+    ok_pass = secrets.compare_digest(
+        body.password.encode(), settings.ADMIN_PASSWORD.encode()
+    )
+
+    if not (ok_user and ok_pass):
+        logger.warning("Failed admin login for %r", body.username)
+        raise HTTPException(status_code=401, detail="Wrong username or password")
+
+    return {"token": _make_session_token()}
 
 
 router = APIRouter(

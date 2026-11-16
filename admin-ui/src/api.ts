@@ -18,6 +18,21 @@ export const setToken = (token: string) => {
   }
 };
 
+export async function login(username: string, password: string) {
+  const response = await fetch("/admin/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+
+  if (response.status === 401) throw new AuthError("Wrong username or password");
+  if (!response.ok) throw new Error(`Login failed (${response.status})`);
+
+  setToken((await response.json()).token);
+}
+
+export const logout = () => setToken("");
+
 export async function api<T>(
   path: string,
   params: Record<string, string | number | undefined> = {},

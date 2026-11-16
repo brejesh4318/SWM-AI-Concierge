@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     DB_SSL: bool = False
     # When set, the admin API requires it in the X-Admin-Token header.
     ADMIN_TOKEN: str = ""
+    # Dashboard login. When ADMIN_PASSWORD is set, users sign in with these.
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = ""
+    # Key used to sign login sessions; falls back to the password.
+    ADMIN_SECRET: str = ""
+    # How long a login stays valid.
+    ADMIN_SESSION_HOURS: int = 12
     # DEBUG, INFO, WARNING or ERROR.
     LOG_LEVEL: str = "INFO"
     # One JSON object per line, for log aggregators.

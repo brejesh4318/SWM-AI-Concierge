@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { setToken } from "./api";
+import { login, logout } from "./api";
 import { useApi } from "./hooks";
 import {
   Complaints,
@@ -18,29 +18,49 @@ const TABS = [
 
 type Tab = (typeof TABS)[number][0];
 
-function Login({ onDone, rejected }: { onDone: () => void; rejected: boolean }) {
-  const [value, setValue] = useState("");
+function Login({ onDone }: { onDone: () => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
   return (
     <form
       className="login"
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
-        setToken(value);
-        onDone();
+        setBusy(true);
+        setError("");
+        try {
+          await login(username, password);
+          onDone(); // re-checks /auth, which now succeeds -> dashboard
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Login failed");
+        } finally {
+          setBusy(false);
+        }
       }}
     >
       <h1>Thuyan Admin</h1>
-      <p className="muted">Enter the admin token (ADMIN_TOKEN in the server .env).</p>
+      <p className="muted">Sign in to open the dashboard.</p>
+      <input
+        autoFocus
+        autoComplete="username"
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+        placeholder="Username"
+      />
       <input
         type="password"
-        autoFocus
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="Admin token"
+        autoComplete="current-password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        placeholder="Password"
       />
-      {rejected && <p className="error">That token was not accepted.</p>}
-      <button type="submit">Sign in</button>
+      {error && <p className="error">{error}</p>}
+      <button type="submit" disabled={busy}>
+        {busy ? "Signing in…" : "Sign in"}
+      </button>
     </form>
   );
 }
@@ -53,7 +73,7 @@ export default function App() {
   const auth = useApi<{ ok: boolean }>("/auth", { attempt });
 
   if (auth.unauthorized) {
-    return <Login rejected={attempt > 0} onDone={() => setAttempt(attempt + 1)} />;
+    return <Login onDone={() => setAttempt(attempt + 1)} />;
   }
 
   const openComplaints = (filters: Partial<Filters>) => {
@@ -87,6 +107,14 @@ export default function App() {
               {label}
             </button>
           ))}
+          <button
+            onClick={() => {
+              logout();
+              setAttempt(attempt + 1);
+            }}
+          >
+            Sign out
+          </button>
         </nav>
       </header>
       <main>
