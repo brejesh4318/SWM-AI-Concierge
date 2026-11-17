@@ -39,9 +39,9 @@ TYPE_ROW_IDS = {
 
 BLOCK_IDS = {
     "lbblk_ooty": "Ooty",
-    "lbblk_kotagiri": "Kotagiri",
-    "lbblk_coonoor": "Coonoor",
-    "lbblk_gudalur": "Gudalur",
+    # "lbblk_kotagiri": "Kotagiri",
+    # "lbblk_coonoor": "Coonoor",
+    # "lbblk_gudalur": "Gudalur",
 }
 
 BLOCK_ROW_IDS = {
@@ -57,22 +57,22 @@ MORE_ID = "lbmore"
 
 # (name, type, block)
 BODIES = (
-    ("Coonoor", MUNICIPALITY, "Coonoor"),
-    ("Nelliyalam", MUNICIPALITY, "Gudalur"),
-    ("Gudalur", MUNICIPALITY, "Gudalur"),
+    # ("Coonoor", MUNICIPALITY, "Coonoor"),
+    # ("Nelliyalam", MUNICIPALITY, "Gudalur"),
+    # ("Gudalur", MUNICIPALITY, "Gudalur"),
     ("Ooty", MUNICIPALITY, "Ooty"),
-    ("Kotagiri", MUNICIPALITY, "Kotagiri"),
+    # ("Kotagiri", MUNICIPALITY, "Kotagiri"),
 
     ("Bikkatty", TOWN, "Ooty"),
     ("Sholur", TOWN, "Ooty"),
     ("Naduvattam", TOWN, "Ooty"),
     ("Kilkundah Town", TOWN, "Ooty"),
-    ("Ketti", TOWN, "Coonoor"),
-    ("Adigaratty", TOWN, "Coonoor"),
-    ("Hulical", TOWN, "Coonoor"),
-    ("Devarshola", TOWN, "Gudalur"),
-    ("Ovalley Town", TOWN, "Gudalur"),
-    ("Jegathala", TOWN, "Kotagiri"),
+    # ("Ketti", TOWN, "Coonoor"),
+    # ("Adigaratty", TOWN, "Coonoor"),
+    # ("Hulical", TOWN, "Coonoor"),
+    # ("Devarshola", TOWN, "Gudalur"),
+    # ("Ovalley Town", TOWN, "Gudalur"),
+    # ("Jegathala", TOWN, "Kotagiri"),
 
     ("Balacola", VILLAGE, "Ooty"),
     ("Doddabetta", VILLAGE, "Ooty"),
@@ -88,30 +88,30 @@ BODIES = (
     ("Thummanatty", VILLAGE, "Ooty"),
     ("Thuneri", VILLAGE, "Ooty"),
 
-    ("Aracode", VILLAGE, "Kotagiri"),
-    ("Denad", VILLAGE, "Kotagiri"),
-    ("Kadinamala", VILLAGE, "Kotagiri"),
-    ("Kengarai", VILLAGE, "Kotagiri"),
-    ("Kodanad", VILLAGE, "Kotagiri"),
-    ("Kunjapani", VILLAGE, "Kotagiri"),
-    ("Naduhatty", VILLAGE, "Kotagiri"),
-    ("Nedugula", VILLAGE, "Kotagiri"),
-    ("Thengumarahada", VILLAGE, "Kotagiri"),
-    ("Jackanarai", VILLAGE, "Kotagiri"),
-    ("Konavakarai", VILLAGE, "Kotagiri"),
+    # ("Aracode", VILLAGE, "Kotagiri"),
+    # ("Denad", VILLAGE, "Kotagiri"),
+    # ("Kadinamala", VILLAGE, "Kotagiri"),
+    # ("Kengarai", VILLAGE, "Kotagiri"),
+    # ("Kodanad", VILLAGE, "Kotagiri"),
+    # ("Kunjapani", VILLAGE, "Kotagiri"),
+    # ("Naduhatty", VILLAGE, "Kotagiri"),
+    # ("Nedugula", VILLAGE, "Kotagiri"),
+    # ("Thengumarahada", VILLAGE, "Kotagiri"),
+    # ("Jackanarai", VILLAGE, "Kotagiri"),
+    # ("Konavakarai", VILLAGE, "Kotagiri"),
 
-    ("Bandhisholai", VILLAGE, "Coonoor"),
-    ("Bearhatty", VILLAGE, "Coonoor"),
-    ("Burliyar", VILLAGE, "Coonoor"),
-    ("Melur", VILLAGE, "Coonoor"),
-    ("Hubbathalai", VILLAGE, "Coonoor"),
-    ("Yedapalli", VILLAGE, "Coonoor"),
+    # ("Bandhisholai", VILLAGE, "Coonoor"),
+    # ("Bearhatty", VILLAGE, "Coonoor"),
+    # ("Burliyar", VILLAGE, "Coonoor"),
+    # ("Melur", VILLAGE, "Coonoor"),
+    # ("Hubbathalai", VILLAGE, "Coonoor"),
+    # ("Yedapalli", VILLAGE, "Coonoor"),
 
-    ("Cherangode", VILLAGE, "Gudalur"),
-    ("Masinagudi", VILLAGE, "Gudalur"),
-    ("Mudhumalai", VILLAGE, "Gudalur"),
-    ("Nellakottai", VILLAGE, "Gudalur"),
-    ("Sreemadurai", VILLAGE, "Gudalur"),
+    # ("Cherangode", VILLAGE, "Gudalur"),
+    # ("Masinagudi", VILLAGE, "Gudalur"),
+    # ("Mudhumalai", VILLAGE, "Gudalur"),
+    # ("Nellakottai", VILLAGE, "Gudalur"),
+    # ("Sreemadurai", VILLAGE, "Gudalur"),
 )
 
 

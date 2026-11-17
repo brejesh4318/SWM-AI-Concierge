@@ -1,8 +1,20 @@
+import logging
 import os
-from app.db.complaints import already_saved, save_complaint
+from app.core.logging import bind_user, mask_phone, timed
+from app.db.complaints import (
+    already_saved,
+    officer_by_phone,
+    officer_for,
+    save_complaint,
+)
 from app.db.session import SessionLocal
+from app.services.officer_service import (
+    handle_officer_message,
+    is_officer_reply,
+    notify_officer,
+)
 
-from app.state.conversation_manager import load_user, persist_user
+from app.state.conversation_manager import get_state, load_user, persist_user
 
 
 from dotenv import load_dotenv
@@ -26,6 +38,7 @@ from app.services.chatbot_service import (
     process_text_message,
 )
 
+from app.services.storage import save_whatsapp_photo
 from app.services.whatsapp_service import (
     send_block_menu,
     send_complaint_menu,
@@ -37,6 +50,8 @@ from app.services.whatsapp_service import (
 )
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -65,9 +80,17 @@ async def verify_webhook(request: Request):
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
 
+        logger.info("Webhook verification succeeded")
+
         return PlainTextResponse(
             challenge or ""
         )
+
+    logger.warning(
+        "Webhook verification failed (mode=%s, token_matched=%s)",
+        mode,
+        token == VERIFY_TOKEN,
+    )
 
     return PlainTextResponse(
         "Verification failed",
@@ -111,17 +134,51 @@ async def receive_webhook(request: Request):
 
     if sender is None:
         # Delivery receipts and status updates carry no message.
+        logger.debug("Ignoring webhook call with no message")
         return {"status": "received"}
 
-    async with SessionLocal() as session:
+    bind_user(sender)
 
-        await load_user(sender, session)
+    async with SessionLocal() as session:
+        
+        with timed("load_user"):
+            await load_user(sender, session)
 
         try:
+            with timed("officer_by_phone"):
+                officer = await officer_by_phone(session, sender)
+
+            message = data["entry"][0]["changes"][0]["value"]["messages"][0]
+
+            logger.info(
+                "Incoming %s message %s (state=%s, officer=%s)",
+                message.get("type"),
+                message.get("id"),
+                get_state(sender).value,
+                officer is not None,
+            )
+
+            if officer is not None and await is_officer_reply(
+                session,
+                officer,
+                message,
+                get_state(sender),
+            ):
+                logger.info("Routing message to the officer handler")
+
+                try:
+                    await handle_officer_message(session, officer, message)
+                except Exception:
+                    logger.exception("Officer handler failed")
+                    await session.rollback()
+
+                return {"status": "received"}
+
             return await _process(data, session)
 
         finally:
-            await persist_user(sender, session)
+            with timed("persist_user"):
+                await persist_user(sender, session)
 
 
 async def _process(data: dict, session=None):
@@ -424,9 +481,22 @@ async def _process(data: dict, session=None):
 
             if media_id:
 
+                try:
+                    photo_path = await save_whatsapp_photo(
+                        media_id,
+                        sender,
+                    )
+                except Exception:
+                    # Keep the complaint flowing; the media ID is still stored.
+                    logger.exception(
+                        "Could not store photo %s; keeping the media id",
+                        media_id,
+                    )
+                    photo_path = media_id
+
                 result = process_photo_message(
                     user_id=sender,
-                    media_id=media_id,
+                    media_id=photo_path,
                 )
 
             else:
@@ -460,6 +530,13 @@ async def _process(data: dict, session=None):
         result_type = result["type"]
 
         language = language_of(sender)
+
+        logger.info(
+            "Replying with %s (language=%s, state=%s)",
+            result_type,
+            language or "-",
+            get_state(sender).value,
+        )
 
         if result_type == "language_menu":
 
@@ -527,7 +604,9 @@ async def _process(data: dict, session=None):
 
             saved = await already_saved(session, wamid)
 
-            if saved is None:
+            is_new = saved is None
+
+            if is_new:
                 saved = await save_complaint(
                     session,
                     complaint,
@@ -536,17 +615,34 @@ async def _process(data: dict, session=None):
 
                 await session.commit()
 
-            print(
-                "\n===== COMPLAINT COMPLETED ====="
-            )
+                logger.info(
+                    "Complaint %s saved (type=%s, local_body=%s)",
+                    saved.reference_no,
+                    saved.complaint_type,
+                    saved.local_body,
+                )
+            else:
+                logger.warning(
+                    "Duplicate delivery of %s; complaint %s already saved",
+                    wamid,
+                    saved.reference_no,
+                )
 
-            print(
-                complaint
-            )
+            officer = await officer_for(session, saved)
 
-            print(
-                "================================\n"
-            )
+            if officer is None:
+                logger.warning(
+                    "Complaint %s has no active officer for %s",
+                    saved.reference_no,
+                    saved.local_body,
+                )
+
+            if is_new and officer is not None:
+                saved.notification_wamid = await notify_officer(
+                    officer, saved
+                )
+
+                await session.commit()
 
             await send_text_message(
                 recipient_phone=sender,
@@ -554,6 +650,7 @@ async def _process(data: dict, session=None):
                     language,
                     saved.reference_no,
                     complaint,
+                    has_officer=officer is not None,
                 ),
             )
 
@@ -561,12 +658,30 @@ async def _process(data: dict, session=None):
             "status": "received",
         }
 
-    except Exception as e:
+    except Exception:
 
-        print(
-            "Webhook processing error:",
-            repr(e),
-        )
+        logger.exception("Webhook processing error")
+
+        if session is not None:
+            await session.rollback()
+
+        try:
+            sender = _sender_of(data)
+
+            if sender is not None:
+                await send_text_message(
+                    recipient_phone=sender,
+                    message=messages.t(
+                        language_of(sender),
+                        "error_try_again",
+                    ),
+                )
+
+        except Exception:
+            logger.exception(
+                "Could not send the error notice to %s",
+                mask_phone(sender),
+            )
 
         return {
             "status": "received",

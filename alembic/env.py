@@ -15,7 +15,9 @@ from app.db.models import Base
 
 config.set_main_option(
     "sqlalchemy.url",
-    get_settings().sync_url,
+    # configparser treats '%' as interpolation, so escape URL-encoded
+    # characters in the password (e.g. %40).
+    get_settings().sync_url.replace("%", "%%"),
 )
 
 # Interpret the config file for Python logging.
